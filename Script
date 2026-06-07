@@ -1,0 +1,160 @@
+-- Clean up old instance if re-executed
+if getgenv().IY_Style_Freecam then
+    getgenv().IY_Style_Freecam:Disconnect()
+    getgenv().IY_Style_Freecam = nil
+    workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+    
+    pcall(function()
+        local PlayerModule = require(game:GetService("Players").LocalPlayer.PlayerScripts:WaitForChild("PlayerModule"))
+        PlayerModule:GetControls():Enable()
+    end)
+    print("Previous Freecam cleared and movement restored.")
+end
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+-- Configuration Keys
+local TOGGLE_KEY = Enum.KeyCode.F4
+local LOCK_KEY = Enum.KeyCode.L
+local SPEED_DOWN_KEY = Enum.KeyCode.LeftBracket  
+local SPEED_UP_KEY = Enum.KeyCode.RightBracket   
+
+-- Speed Variables (Strict fallback defaults)
+local flySpeed = 1.2
+local minSpeed = 0.1
+local maxSpeed = 5.0
+local speedStep = 0.15
+local shiftMultiplier = 2.5
+local sensitivity = 0.4
+
+-- State variables
+local active = false
+local headLock = false
+local camCFrame = camera.CFrame
+local rotationX, rotationY = 0, 0
+
+-- Track keys for smooth flying
+local movement = {W = 0, A = 0, S = 0, D = 0, E = 0, Q = 0}
+
+-- Helper function to toggle player movement controls safely
+local function setMovementEnabled(enabled)
+    pcall(function()
+        local PlayerModule = require(player.PlayerScripts:WaitForChild("PlayerModule", 5))
+        if PlayerModule then
+            local controls = PlayerModule:GetControls()
+            if enabled then
+                controls:Enable()
+            else
+                controls:Disable()
+            end
+        end
+    end)
+end
+
+UserInputService.InputBegan:Connect(function(input, processed)
+    -- Speed control adjustments (Fixed to ensure numbers are never assigned nil)
+    if active then
+        if input.KeyCode == SPEED_UP_KEY then
+            local newSpeed = flySpeed + speedStep
+            if newSpeed > maxSpeed then newSpeed = maxSpeed end
+            flySpeed = newSpeed
+            print("Freecam Speed increased to: " .. string.format("%.2f", flySpeed))
+            return
+        elseif input.KeyCode == SPEED_DOWN_KEY then
+            local newSpeed = flySpeed - speedStep
+            if newSpeed < minSpeed then newSpeed = minSpeed end
+            flySpeed = newSpeed
+            print("Freecam Speed decreased to: " .. string.format("%.2f", flySpeed))
+            return
+        end
+    end
+
+    if processed then return end
+    
+    -- Main Toggle
+    if input.KeyCode == TOGGLE_KEY then
+        active = not active
+        if active then
+            setMovementEnabled(false) 
+            camera.CameraType = Enum.CameraType.Scriptable
+            camCFrame = camera.CFrame
+            
+            local _, y, z = camera.CFrame:ToOrientation()
+            rotationX = math.deg(y)
+            rotationY = math.deg(z)
+            UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
+            print("Freecam Active: Character Frozen.")
+        else
+            headLock = false
+            setMovementEnabled(true) 
+            camera.CameraType = Enum.CameraType.Custom
+            UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+            print("Freecam Inactive: Character Unfrozen.")
+        end
+    end
+    
+    -- Head Lock Toggle
+    if active and input.KeyCode == LOCK_KEY then
+        headLock = not headLock
+        print("Head Lock:", headLock and "ENABLED" or "DISABLED")
+    end
+    
+    -- Movement inputs for the Freecam
+    if active then
+        if input.KeyCode == Enum.KeyCode.W then movement.W = 1 end
+        if input.KeyCode == Enum.KeyCode.S then movement.S = 1 end
+        if input.KeyCode == Enum.KeyCode.A then movement.A = 1 end
+        if input.KeyCode == Enum.KeyCode.D then movement.D = 1 end
+        if input.KeyCode == Enum.KeyCode.E then movement.E = 1 end 
+        if input.KeyCode == Enum.KeyCode.Q then movement.Q = 1 end 
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.KeyCode == Enum.KeyCode.W then movement.W = 0 end
+    if input.KeyCode == Enum.KeyCode.S then movement.S = 0 end
+    if input.KeyCode == Enum.KeyCode.A then movement.A = 0 end
+    if input.KeyCode == Enum.KeyCode.D then movement.D = 0 end
+    if input.KeyCode == Enum.KeyCode.E then movement.E = 0 end
+    if input.KeyCode == Enum.KeyCode.Q then movement.Q = 0 end
+end)
+
+getgenv().IY_Style_Freecam = RunService.RenderStepped:Connect(function(dt)
+    if not active then return end
+    
+    -- Handle Mouse Look
+    local delta = UserInputService:GetMouseDelta()
+    rotationX = rotationX - (delta.X * sensitivity)
+    rotationY = math.clamp(rotationY - (delta.Y * sensitivity), -85, 85)
+    
+    -- Ensure fallback baseline numbers exist to completely bypass line 129 errors
+    local currentSpeed = tonumber(flySpeed) or 1.2
+    if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
+        currentSpeed = currentSpeed * shiftMultiplier
+    end
+    
+    local direction = Vector3.new(movement.D - movement.A, movement.E - movement.Q, movement.S - movement.W)
+    local rotationMatrix = CFrame.Angles(0, math.rad(rotationX), 0) * CFrame.Angles(math.rad(rotationY), 0, 0)
+    
+    -- Safe Vector Multiplication
+    local moveVector = rotationMatrix:VectorToWorldSpace(direction) * currentSpeed
+    camCFrame = camCFrame + moveVector
+    
+    -- Find Head for Locking
+    local character = player.Character
+    local head = character and character:FindFirstChild("Head")
+    
+    if headLock and head then
+        camera.CFrame = CFrame.new(camCFrame.Position, head.Position)
+    else
+        camera.CFrame = CFrame.new(camCFrame.Position) * rotationMatrix
+    end
+end)
+
+print("Cinematic Freecam Fixed & Loaded!")
+print("F4: Toggle Cam | L: Lock to Head | [: Speed Down | ]: Speed Up")
