@@ -38,4 +38,4 @@ A lightweight, universally compatible Luau execution script engineered specifica
 ## 🛠️ Installation / Script
 
 ```lua
--- Paste the code here or link to your script.lua file!
+-- loadstring(game:HttpGet('https://raw.githubusercontent.com/2dum4code/Self-Camlock/refs/heads/main/Script'))()
