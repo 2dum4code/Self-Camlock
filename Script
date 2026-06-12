@@ -22,32 +22,34 @@ local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
 -- Configuration Keys
-local TOGGLE_KEY = Enum.KeyCode.F4     -- Freecam Flight Mode On/Off
-local MENU_KEY = Enum.KeyCode.K        -- Show/Hide UI Menu Panel
+local TOGGLE_KEY = Enum.KeyCode.F4     
+local MENU_KEY = Enum.KeyCode.K        
 local SPEED_DOWN_KEY = Enum.KeyCode.LeftBracket  
 local SPEED_UP_KEY = Enum.KeyCode.RightBracket   
 
 -- State variables
 local active = false
 local menuVisible = false
+local showingInstructions = false
 local targets = {} 
 local camCFrame = camera.CFrame
 local rotationX, rotationY = 0, 0
 local savedDefaultFov = camera.FieldOfView
+local orbitDistance = 20 
 
--- Adjustable Parameters (Original Baseline Fallbacks)
-local flySpeed = 1.2
+-- Tuned Parameters
+local flySpeed = 1.0
 local minSpeed = 0.1
-local maxSpeed = 5.0
+local maxSpeed = 4.0
 local speedStep = 0.15
-local shiftMultiplier = 2.5
+local shiftMultiplier = 2.2
 local sensitivity = 0.4
 local targetFov = 70
-local smoothingWeight = 10 
+local smoothingWeight = 15 
 
 local movement = {W = 0, A = 0, S = 0, D = 0, E = 0, Q = 0}
 
--- Setup UI Environment (Using PlayerGui for guaranteed initialization)
+-- Setup UI Environment
 local playerGui = player:WaitForChild("PlayerGui", 10)
 if not playerGui then return end
 
@@ -57,7 +59,26 @@ ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.Parent = playerGui
 
--- Gradient Aesthetics Styling Blocks
+-- Canvas Group for Smooth Fading Transitions
+local MainCanvas = Instance.new("CanvasGroup")
+MainCanvas.Name = "MainCanvas"
+MainCanvas.Size = UDim2.new(0, 250, 0, 360)
+MainCanvas.Position = UDim2.new(0.05, 0, 0.2, 0)
+MainCanvas.BackgroundTransparency = 1
+MainCanvas.GroupTransparency = 1
+MainCanvas.Visible = false
+MainCanvas.Active = true
+MainCanvas.Draggable = true 
+MainCanvas.Parent = ScreenGui
+
+-- Base Frame inside Canvas
+local MainPanel = Instance.new("Frame")
+MainPanel.Name = "MainPanel"
+MainPanel.Size = UDim2.new(1, 0, 1, 0)
+MainPanel.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+MainPanel.BorderSizePixel = 0
+MainPanel.Parent = MainCanvas
+
 local function applyDarkGradient(instance)
     local gradient = Instance.new("UIGradient")
     gradient.Color = ColorSequence.new({
@@ -78,18 +99,6 @@ local function applyBorderGradient(instance)
     gradient.Parent = instance
 end
 
--- Main Panel UI Frame
-local MainPanel = Instance.new("Frame")
-MainPanel.Name = "MainPanel"
-MainPanel.Size = UDim2.new(0, 250, 0, 360)
-MainPanel.Position = UDim2.new(0.05, 0, 0.2, 0)
-MainPanel.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-MainPanel.BorderSizePixel = 0
-MainPanel.Visible = false
-MainPanel.Active = true
-MainPanel.Draggable = true 
-MainPanel.Parent = ScreenGui
-
 applyDarkGradient(MainPanel)
 
 local MainCorner = Instance.new("UICorner")
@@ -102,9 +111,10 @@ MainStroke.Color = Color3.fromRGB(255, 255, 255)
 MainStroke.Parent = MainPanel
 applyBorderGradient(MainStroke)
 
+-- Header Title
 local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, -40, 0, 35)
-Title.Position = UDim2.new(0, 12, 0, 0)
+Title.Size = UDim2.new(1, -70, 0, 35)
+Title.Position = UDim2.new(0, 14, 0, 0)
 Title.BackgroundTransparency = 1
 Title.Text = "Cinematic Freecam Studio"
 Title.TextColor3 = Color3.fromRGB(230, 235, 255)
@@ -113,7 +123,38 @@ Title.TextSize = 13
 Title.TextXAlignment = Enum.TextXAlignment.Left
 Title.Parent = MainPanel
 
--- Close Menu Button Configuration ("X")
+-- Container Windows (Main Controls Frame vs Instructions Frame)
+local ControlsFrame = Instance.new("Frame")
+ControlsFrame.Name = "ControlsFrame"
+ControlsFrame.Size = UDim2.new(1, 0, 1, -35)
+ControlsFrame.Position = UDim2.new(0, 0, 0, 35)
+ControlsFrame.BackgroundTransparency = 1
+ControlsFrame.Parent = MainPanel
+
+local InstructionsFrame = Instance.new("Frame")
+InstructionsFrame.Name = "InstructionsFrame"
+InstructionsFrame.Size = UDim2.new(1, 0, 1, -35)
+InstructionsFrame.Position = UDim2.new(0, 0, 0, 35)
+InstructionsFrame.BackgroundTransparency = 1
+InstructionsFrame.Visible = false
+InstructionsFrame.Parent = MainPanel
+
+-- Smooth Menu Toggle Logic Function
+local function toggleMenu(show)
+    if show then
+        MainCanvas.Visible = true
+        TweenService:Create(MainCanvas, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {GroupTransparency = 0}):Play()
+        refreshPlayerList()
+    else
+        local tween = TweenService:Create(MainCanvas, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {GroupTransparency = 1})
+        tween:Play()
+        tween.Completed:Connect(function()
+            if not menuVisible then MainCanvas.Visible = false end
+        end)
+    end
+end
+
+-- Close Menu Button ("X")
 local CloseButton = Instance.new("TextButton")
 CloseButton.Name = "CloseButton"
 CloseButton.Size = UDim2.new(0, 24, 0, 24)
@@ -136,19 +177,54 @@ CloseStroke.Parent = CloseButton
 
 CloseButton.MouseButton1Click:Connect(function()
     menuVisible = false
-    MainPanel.Visible = false
+    showingInstructions = false
+    ControlsFrame.Visible = true
+    InstructionsFrame.Visible = false
+    toggleMenu(false)
 end)
 
--- Scrolling Dropdown Box Element
+-- Help/Instructions Button ("?")
+local HelpButton = Instance.new("TextButton")
+HelpButton.Name = "HelpButton"
+HelpButton.Size = UDim2.new(0, 24, 0, 24)
+HelpButton.Position = UDim2.new(1, -56, 0, 6)
+HelpButton.BackgroundColor3 = Color3.fromRGB(25, 30, 45)
+HelpButton.Text = "?"
+HelpButton.TextColor3 = Color3.fromRGB(100, 160, 255)
+HelpButton.Font = Enum.Font.GothamBold
+HelpButton.TextSize = 14
+HelpButton.Parent = MainPanel
+
+local HelpCorner = Instance.new("UICorner")
+HelpCorner.CornerRadius = UDim.new(0, 4)
+HelpCorner.Parent = HelpButton
+
+local HelpStroke = Instance.new("UIStroke")
+HelpStroke.Thickness = 1
+HelpStroke.Color = Color3.fromRGB(35, 55, 95)
+HelpStroke.Parent = HelpButton
+
+HelpButton.MouseButton1Click:Connect(function()
+    showingInstructions = not showingInstructions
+    if showingInstructions then
+        ControlsFrame.Visible = false
+        InstructionsFrame.Visible = true
+    else
+        InstructionsFrame.Visible = false
+        ControlsFrame.Visible = true
+    end
+end)
+
+-- Scrolling Selection Box Layout Setup
 local PlayerList = Instance.new("ScrollingFrame")
-PlayerList.Size = UDim2.new(0.9, 0, 0.4, 0)
-PlayerList.Position = UDim2.new(0.05, 0, 0.12, 0)
+PlayerList.Size = UDim2.new(0.9, 0, 0.45, 0)
+PlayerList.Position = UDim2.new(0.05, 0, 0.02, 0)
 PlayerList.BackgroundColor3 = Color3.fromRGB(8, 9, 13)
 PlayerList.BorderSizePixel = 0
 PlayerList.CanvasSize = UDim2.new(0, 0, 0, 0)
 PlayerList.ScrollBarThickness = 4
 PlayerList.ScrollBarImageColor3 = Color3.fromRGB(45, 55, 80)
-PlayerList.Parent = MainPanel
+PlayerList.Parent = ControlsFrame
 
 local ListCorner = Instance.new("UICorner")
 ListCorner.CornerRadius = UDim.new(0, 6)
@@ -162,31 +238,38 @@ applyBorderGradient(ListStroke)
 
 local UIListLayout = Instance.new("UIListLayout")
 UIListLayout.SortOrder = Enum.SortOrder.Name
-UIListLayout.Padding = UDim.new(0, 4)
+UIListLayout.Padding = UDim.new(0, 5) 
 UIListLayout.Parent = PlayerList
 
--- Setup Interactive Dual-Input FOV Interface Matrix
+local ListPadding = Instance.new("UIPadding")
+ListPadding.PaddingTop = UDim.new(0, 6)
+ListPadding.PaddingBottom = UDim.new(0, 6)
+ListPadding.PaddingLeft = UDim.new(0, 6)  
+ListPadding.PaddingRight = UDim.new(0, 6)
+ListPadding.Parent = PlayerList
+
+-- Setup Interactive Dual-Input FOV Layout
 local FOVLabel = Instance.new("TextLabel")
 FOVLabel.Size = UDim2.new(0.5, 0, 0, 20)
-FOVLabel.Position = UDim2.new(0.05, 0, 0.56, 0)
+FOVLabel.Position = UDim2.new(0.05, 0, 0.54, 0)
 FOVLabel.BackgroundTransparency = 1
 FOVLabel.Text = "Field of View"
 FOVLabel.TextColor3 = Color3.fromRGB(180, 190, 210)
 FOVLabel.Font = Enum.Font.GothamSemibold
 FOVLabel.TextSize = 12
 FOVLabel.TextXAlignment = Enum.TextXAlignment.Left
-FOVLabel.Parent = MainPanel
+FOVLabel.Parent = ControlsFrame
 
 local FOVTextBox = Instance.new("TextBox")
 FOVTextBox.Size = UDim2.new(0.35, 0, 0, 20)
-FOVTextBox.Position = UDim2.new(0.6, 0, 0.56, 0)
+FOVTextBox.Position = UDim2.new(0.6, 0, 0.54, 0)
 FOVTextBox.BackgroundColor3 = Color3.fromRGB(12, 14, 20)
 FOVTextBox.Text = tostring(targetFov)
 FOVTextBox.TextColor3 = Color3.fromRGB(255, 255, 255)
 FOVTextBox.Font = Enum.Font.Code
 FOVTextBox.TextSize = 12
 FOVTextBox.ClipsDescendants = true
-FOVTextBox.Parent = MainPanel
+FOVTextBox.Parent = ControlsFrame
 
 local BoxCorner = Instance.new("UICorner")
 BoxCorner.CornerRadius = UDim.new(0, 4)
@@ -204,7 +287,7 @@ FOVSliderBar.Position = UDim2.new(0.05, 0, 0.63, 0)
 FOVSliderBar.BackgroundColor3 = Color3.fromRGB(15, 18, 26)
 FOVSliderBar.Text = ""
 FOVSliderBar.AutoButtonColor = false
-FOVSliderBar.Parent = MainPanel
+FOVSliderBar.Parent = ControlsFrame
 
 local BarStroke = Instance.new("UIStroke")
 BarStroke.Thickness = 1
@@ -218,7 +301,7 @@ FOVSliderFill.BackgroundColor3 = Color3.fromRGB(40, 90, 180)
 FOVSliderFill.BorderSizePixel = 0
 FOVSliderFill.Parent = FOVSliderBar
 
--- Tracking Smoothness System Custom Slider Elements
+-- Tracking Smoothness Config Slider Elements
 local SmoothLabel = Instance.new("TextLabel")
 SmoothLabel.Size = UDim2.new(0.9, 0, 0, 20)
 SmoothLabel.Position = UDim2.new(0.05, 0, 0.72, 0)
@@ -228,15 +311,15 @@ SmoothLabel.TextColor3 = Color3.fromRGB(180, 190, 210)
 SmoothLabel.Font = Enum.Font.GothamSemibold
 SmoothLabel.TextSize = 12
 SmoothLabel.TextXAlignment = Enum.TextXAlignment.Left
-SmoothLabel.Parent = MainPanel
+SmoothLabel.Parent = ControlsFrame
 
 local SmoothSliderBar = Instance.new("TextButton")
 SmoothSliderBar.Size = UDim2.new(0.9, 0, 0, 6)
-SmoothSliderBar.Position = UDim2.new(0.05, 0, 0.79, 0)
+SmoothSliderBar.Position = UDim2.new(0.05, 0, 0.81, 0)
 SmoothSliderBar.BackgroundColor3 = Color3.fromRGB(15, 18, 26)
 SmoothSliderBar.Text = ""
 SmoothSliderBar.AutoButtonColor = false
-SmoothSliderBar.Parent = MainPanel
+SmoothSliderBar.Parent = ControlsFrame
 
 local SmoothStroke = Instance.new("UIStroke")
 SmoothStroke.Thickness = 1
@@ -250,11 +333,79 @@ SmoothSliderFill.BackgroundColor3 = Color3.fromRGB(40, 90, 180)
 SmoothSliderFill.BorderSizePixel = 0
 SmoothSliderFill.Parent = SmoothSliderBar
 
+-- Building the Inside View of Instructions Pane
+local GuideScroller = Instance.new("ScrollingFrame")
+GuideScroller.Size = UDim2.new(0.9, 0, 0.8, 0)
+GuideScroller.Position = UDim2.new(0.05, 0, 0.02, 0)
+GuideScroller.BackgroundColor3 = Color3.fromRGB(8, 9, 13)
+GuideScroller.BorderSizePixel = 0
+GuideScroller.CanvasSize = UDim2.new(0, 0, 0, 290)
+GuideScroller.ScrollBarThickness = 4
+GuideScroller.ScrollBarImageColor3 = Color3.fromRGB(45, 55, 80)
+GuideScroller.Parent = InstructionsFrame
+
+local GuideCorner = Instance.new("UICorner")
+GuideCorner.CornerRadius = UDim.new(0, 6)
+GuideCorner.Parent = GuideScroller
+
+local GuideStroke = Instance.new("UIStroke")
+GuideStroke.Thickness = 1
+GuideStroke.Color = Color3.fromRGB(255, 255, 255)
+GuideStroke.Parent = GuideScroller
+applyBorderGradient(GuideStroke)
+
+local GuideText = Instance.new("TextLabel")
+GuideText.Size = UDim2.new(1, -16, 1, 0)
+GuideText.Position = UDim2.new(0, 8, 0, 5)
+GuideText.BackgroundTransparency = 1
+GuideText.Text = "<b>[SYSTEM CONTROLS]</b>\n" ..
+"• <b>F4</b> : Toggle Freecam Mode On/Off\n" ..
+"• <b>K</b> : Open / Close This Control Layout\n\n" ..
+"<b>[ORBIT CONTROL MOVEMENTS]</b>\n" ..
+"• <b>A / D</b> : Orbit Left / Right around targets\n" ..
+"• <b>E / Q</b> : Orbit Vertically Up / Down\n" ..
+"• <b>W / S</b> : Zoom Camera Distance In / Out\n" ..
+"• <b>Hold Left Shift</b> : Speed up orbit panning acceleration\n" ..
+"• <b>Hold Right Click</b> : Lock Cursor & Look Around\n\n" ..
+"<b>[SPEED MODIFIERS]</b>\n" ..
+"• <b>] (Right Bracket)</b> : Increase default speed\n" ..
+"• <b>[ (Left Bracket)</b> : Decrease default speed\n\n" ..
+"<b>[CINEMATIC PLAYER TRACKING]</b>\n" ..
+"Select single or multiple players from the panel roster. The camera will dynamically compute the fluid midpoint tracking position seamlessly."
+GuideText.TextColor3 = Color3.fromRGB(200, 210, 230)
+GuideText.Font = Enum.Font.Gotham
+GuideText.TextSize = 11
+GuideText.TextWrapped = true
+GuideText.RichText = true
+GuideText.TextYAlignment = Enum.TextYAlignment.Top
+GuideText.TextXAlignment = Enum.TextXAlignment.Left
+GuideText.Parent = GuideScroller
+
+local ReturnButton = Instance.new("TextButton")
+ReturnButton.Size = UDim2.new(0.9, 0, 0.12, 0)
+ReturnButton.Position = UDim2.new(0.05, 0, 0.85, 0)
+ReturnButton.BackgroundColor3 = Color3.fromRGB(25, 35, 55)
+ReturnButton.Text = "Back to Panel"
+ReturnButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+ReturnButton.Font = Enum.Font.GothamBold
+ReturnButton.TextSize = 11
+ReturnButton.Parent = InstructionsFrame
+
+local ReturnCorner = Instance.new("UICorner")
+ReturnCorner.CornerRadius = UDim.new(0, 4)
+ReturnCorner.Parent = ReturnButton
+
+ReturnButton.MouseButton1Click:Connect(function()
+    showingInstructions = false
+    InstructionsFrame.Visible = false
+    ControlsFrame.Visible = true
+end)
+
 -- Pop-up Tracking Status Notification Card
 local NotificationFrame = Instance.new("Frame")
 NotificationFrame.Name = "NotificationFrame"
 NotificationFrame.Size = UDim2.new(0, 280, 0, 65)
-NotificationFrame.Position = UDim2.new(1, 300, 1, -85) -- Set default out of screen layout limits
+NotificationFrame.Position = UDim2.new(1, 300, 1, -85) 
 NotificationFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 NotificationFrame.BorderSizePixel = 0
 NotificationFrame.Parent = ScreenGui
@@ -346,68 +497,104 @@ local function setMovementEnabled(enabled)
     end)
 end
 
-local function refreshPlayerList()
+local function getTrackingCenter()
+    local activePositions = {}
+    for id, p in pairs(targets) do
+        if p and p.Parent == Players and p.Character and p.Character:FindFirstChild("Head") then
+            table.insert(activePositions, p.Character.Head.Position)
+        end
+    end
+    
+    if #activePositions > 0 then
+        local trackingCenter = Vector3.new(0, 0, 0)
+        for _, pos in ipairs(activePositions) do
+            trackingCenter = trackingCenter + pos
+        end
+        return trackingCenter / #activePositions
+    end
+    return nil
+end
+
+function refreshPlayerList()
     for _, child in ipairs(PlayerList:GetChildren()) do
         if child:IsA("TextButton") then child:Destroy() end
     end
     
     for _, p in ipairs(Players:GetPlayers()) do
+        local isCurrentlySelected = (targets[p.UserId] ~= nil)
+        
         local btn = Instance.new("TextButton")
-        btn.Size = UDim2.new(1, -6, 0, 28)
-        btn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        btn.Size = UDim2.new(1, -12, 0, 30)
         btn.Text = "  " .. p.DisplayName .. " (@" .. p.Name .. ")"
-        btn.TextColor3 = targets[p.UserId] and Color3.fromRGB(120, 180, 255) or Color3.fromRGB(200, 210, 230)
-        btn.Font = Enum.Font.Gotham
+        
+        btn.TextColor3 = isCurrentlySelected and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(195, 200, 210)
+        btn.Font = isCurrentlySelected and Enum.Font.GothamBold or Enum.Font.Gotham
         btn.TextSize = 11
         btn.TextXAlignment = Enum.TextXAlignment.Left
         btn.BorderSizePixel = 0
         btn.Parent = PlayerList
         
-        applyDarkGradient(btn)
-        
-        local btnStroke = Instance.new("UIStroke")
-        btnStroke.Thickness = 1
-        btnStroke.Color = Color3.fromRGB(255, 255, 255)
-        btnStroke.Parent = btn
-        
-        if targets[p.UserId] then
-            btnStroke.Color = Color3.fromRGB(40, 120, 230)
-        else
-            applyBorderGradient(btnStroke)
-        end
-        
         local btnCorner = Instance.new("UICorner")
         btnCorner.CornerRadius = UDim.new(0, 4)
         btnCorner.Parent = btn
 
+        local btnStroke = Instance.new("UIStroke")
+        btnStroke.Thickness = isCurrentlySelected and 1.5 or 1
+        btnStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        btnStroke.Parent = btn
+
+        if isCurrentlySelected then
+            btn.BackgroundColor3 = Color3.fromRGB(46, 57, 92) 
+            btnStroke.Color = Color3.fromRGB(80, 140, 255)    
+        else
+            btn.BackgroundColor3 = Color3.fromRGB(22, 25, 38)                              
+            applyBorderGradient(btnStroke)                       
+        end
+
         btn.MouseButton1Click:Connect(function()
             if targets[p.UserId] then
                 targets[p.UserId] = nil
-                btn.TextColor3 = Color3.fromRGB(200, 210, 230)
+                btn.TextColor3 = Color3.fromRGB(195, 200, 210)
+                btn.Font = Enum.Font.Gotham
+                
+                local grad = btn:FindFirstChildOfClass("UIGradient")
+                if grad then grad:Destroy() end
                 btnStroke:Destroy()
-                local newStroke = Instance.new("UIStroke")
-                newStroke.Thickness = 1
-                newStroke.Color = Color3.fromRGB(255, 255, 255)
-                newStroke.Parent = btn
-                applyBorderGradient(newStroke)
+
+                btn.BackgroundColor3 = Color3.fromRGB(22, 25, 38)
+                
+                btnStroke = Instance.new("UIStroke")
+                btnStroke.Thickness = 1
+                btnStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+                btnStroke.Parent = btn
+                applyBorderGradient(btnStroke)
             else
                 targets[p.UserId] = p
-                btn.TextColor3 = Color3.fromRGB(120, 180, 255)
-                btnStroke:Destroy()
-                local newStroke = Instance.new("UIStroke")
-                newStroke.Thickness = 1.5
-                newStroke.Color = Color3.fromRGB(40, 120, 230)
-                newStroke.Parent = btn
+                btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                btn.Font = Enum.Font.GothamBold
+                
+                local grad = btn:FindFirstChildOfClass("UIGradient")
+                if grad then grad:Destroy() end 
+                
+                btn.BackgroundColor3 = Color3.fromRGB(46, 57, 92)
+                btnStroke.Color = Color3.fromRGB(80, 140, 255)
+                btnStroke.Thickness = 1.5
+                
+                local center = getTrackingCenter()
+                if center then
+                    orbitDistance = (camera.CFrame.Position - center).Magnitude
+                    if orbitDistance < 4 then orbitDistance = 20 end
+                end
             end
         end)
     end
-    PlayerList.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y)
+    PlayerList.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y + 12)
 end
 
 Players.PlayerAdded:Connect(refreshPlayerList)
 Players.PlayerRemoving:Connect(function(p) targets[p.UserId] = nil; refreshPlayerList() end)
 
--- Handle Inputs Engine Thread
+-- Handle Inputs
 UserInputService.InputBegan:Connect(function(input, processed)
     if active then
         if input.KeyCode == SPEED_UP_KEY then
@@ -421,14 +608,13 @@ UserInputService.InputBegan:Connect(function(input, processed)
 
     if processed then return end
     
-    -- "K" Setup Menu Trigger Toggle Logic
+    -- "K" Setup Menu Trigger
     if input.KeyCode == MENU_KEY then
         menuVisible = not menuVisible
-        MainPanel.Visible = menuVisible
-        if menuVisible then refreshPlayerList() end
+        toggleMenu(menuVisible)
     end
     
-    -- Original Freecam Activation Toggle (F4)
+    -- Main Freecam Activation Toggle (F4)
     if input.KeyCode == TOGGLE_KEY then
         active = not active
         if active then
@@ -437,11 +623,16 @@ UserInputService.InputBegan:Connect(function(input, processed)
             camera.CameraType = Enum.CameraType.Scriptable
             camCFrame = camera.CFrame
             
-            local _, y, z = camera.CFrame:ToOrientation()
-            rotationX = math.deg(y)
-            rotationY = math.deg(z)
+            local rx, ry, _ = camera.CFrame:ToEulerAnglesYXZ()
+            rotationX = math.deg(ry)
+            rotationY = math.clamp(math.deg(rx), -85, 85)
+            
+            local center = getTrackingCenter()
+            if center then
+                orbitDistance = (camera.CFrame.Position - center).Magnitude
+                if orbitDistance < 4 then orbitDistance = 20 end
+            end
         else
-            targets = {}
             setMovementEnabled(true) 
             camera.CameraType = Enum.CameraType.Custom
             camera.FieldOfView = savedDefaultFov
@@ -468,13 +659,12 @@ UserInputService.InputEnded:Connect(function(input)
     if input.KeyCode == Enum.KeyCode.Q then movement.Q = 0 end
 end)
 
--- Main Run Engine Runtime Loop
+-- Main Loop Runtime
 getgenv().IY_Style_Freecam = RunService.RenderStepped:Connect(function(dt)
     if not active then return end
     
     camera.FieldOfView = camera.FieldOfView + (targetFov - camera.FieldOfView) * math.clamp(dt * 12, 0, 1)
 
-    -- Mouse looking is only structural when holding right click down (Allows safe layout clicks)
     local isPanActive = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
     if isPanActive then
         if not FOVTextBox:IsFocused() then
@@ -487,33 +677,39 @@ getgenv().IY_Style_Freecam = RunService.RenderStepped:Connect(function(dt)
         UserInputService.MouseBehavior = Enum.MouseBehavior.Default
     end
     
-    local currentSpeed = tonumber(flySpeed) or 1.2
+    local currentSpeed = tonumber(flySpeed) or 1.0
     if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
         currentSpeed = currentSpeed * shiftMultiplier
     end
     
-    local direction = Vector3.new(movement.D - movement.A, movement.E - movement.Q, movement.S - movement.W)
-    local rotationMatrix = CFrame.Angles(0, math.rad(rotationX), 0) * CFrame.Angles(math.rad(rotationY), 0, 0)
-    local moveVector = rotationMatrix:VectorToWorldSpace(direction) * currentSpeed
-    camCFrame = camCFrame + moveVector
+    local trackingCenter = getTrackingCenter()
     
-    local activePositions = {}
-    for _, p in pairs(targets) do
-        if p.Character and p.Character:FindFirstChild("Head") then
-            table.insert(activePositions, p.Character.Head.Position)
-        end
-    end
-    
-    if #activePositions > 0 then
-        local trackingCenter = Vector3.new(0, 0, 0)
-        for _, pos in ipairs(activePositions) do
-            trackingCenter = trackingCenter + pos
-        end
-        trackingCenter = trackingCenter / #activePositions
+    if trackingCenter then
+        local angularSpeed = currentSpeed * 65 * dt 
         
-        local targetLookCFrame = CFrame.new(camCFrame.Position, trackingCenter)
-        camera.CFrame = camera.CFrame:Lerp(targetLookCFrame, math.clamp(dt * smoothingWeight, 0, 1))
+        if movement.A == 1 then rotationX = rotationX - angularSpeed end
+        if movement.D == 1 then rotationX = rotationX + angularSpeed end
+        if movement.E == 1 then rotationY = math.clamp(rotationY - angularSpeed, -85, 85) end
+        if movement.Q == 1 then rotationY = math.clamp(rotationY + angularSpeed, -85, 85) end
+        
+        -- SPEED FIX: Re-scaled distance velocity down from 22 to 10 to balance perfectly with the rotation pacing
+        if movement.W == 1 then orbitDistance = math.max(orbitDistance - (currentSpeed * 10 * dt), 3) end
+        if movement.S == 1 then orbitDistance = orbitDistance + (currentSpeed * 10 * dt) end
+        
+        local rotationMatrix = CFrame.Angles(0, math.rad(rotationX), 0) * CFrame.Angles(math.rad(rotationY), 0, 0)
+        local targetPos = trackingCenter + (rotationMatrix * Vector3.new(0, 0, orbitDistance))
+        
+        camCFrame = CFrame.new(targetPos) * rotationMatrix
+        
+        local mappedLerpSpeed = 31 - math.clamp(smoothingWeight, 1, 30)
+        camera.CFrame = camera.CFrame:Lerp(CFrame.new(camCFrame.Position, trackingCenter), math.clamp(dt * mappedLerpSpeed, 0, 1))
     else
+        -- Standard Fly Mode
+        local direction = Vector3.new(movement.D - movement.A, movement.E - movement.Q, movement.S - movement.W)
+        local rotationMatrix = CFrame.Angles(0, math.rad(rotationX), 0) * CFrame.Angles(math.rad(rotationY), 0, 0)
+        local moveVector = rotationMatrix:VectorToWorldSpace(direction) * (currentSpeed * 15 * dt)
+        camCFrame = camCFrame + moveVector
+        
         local rawTargetCFrame = CFrame.new(camCFrame.Position) * rotationMatrix
         if isPanActive then
             camera.CFrame = rawTargetCFrame
@@ -523,7 +719,7 @@ getgenv().IY_Style_Freecam = RunService.RenderStepped:Connect(function(dt)
     end
 end)
 
--- Execute Linear Notification Intro animation frame safely
+-- Notification Slide-In
 task.spawn(function()
     task.wait(0.5)
     TweenService:Create(NotificationFrame, TweenInfo.new(0.6, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
